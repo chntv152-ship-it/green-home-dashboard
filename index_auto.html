@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Green Home Analytics Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #1f2937; background: #f9fafb; }
+  .container { max-width: 1300px; margin: 0 auto; padding: 1.5rem; }
+  .header { margin-bottom: 2rem; }
+  .header h1 { font-size: 28px; font-weight: 500; margin-bottom: 0.5rem; }
+  .header p { font-size: 14px; color: #6b7280; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 2rem; }
+  .metric-card { background: white; border: 1px solid #e5e7eb; padding: 1.25rem; border-radius: 8px; }
+  .metric-label { font-size: 12px; color: #6b7280; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .metric-value { font-size: 26px; font-weight: 500; color: #1f2937; }
+  .metric-small { font-size: 12px; color: #6b7280; margin-top: 6px; }
+  .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+  .chart-wrapper { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1.5rem; }
+  .chart-wrapper h3 { font-size: 16px; font-weight: 500; margin-bottom: 1.25rem; }
+  .chart-container { position: relative; height: 320px; }
+  .table-wrapper { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; overflow-x: auto; }
+  .table-wrapper h3 { font-size: 16px; font-weight: 500; margin-bottom: 1rem; }
+  table { width: 100%; font-size: 13px; border-collapse: collapse; }
+  th { text-align: left; padding: 12px 10px; border-bottom: 1px solid #e5e7eb; font-weight: 500; color: #6b7280; background: #f9fafb; }
+  td { padding: 12px 10px; border-bottom: 1px solid #e5e7eb; }
+  tbody tr:hover { background: #f9fafb; }
+  .loading { text-align: center; padding: 3rem; color: #6b7280; }
+  .error { color: #dc2626; padding: 1.5rem; background: #fee2e2; border-radius: 8px; margin: 1rem 0; border-left: 4px solid #dc2626; }
+  .text-success { color: #16a34a; }
+  .text-danger { color: #dc2626; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>Green Home Analytics</h1>
+    <p id="last-update">Загрузка данных...</p>
+  </div>
+  <div id="content" class="loading">⏳ Подтягиваю данные с Google Sheets...</div>
+</div>
+<script>
+const SHEET_ID = '1KlICmlMIxCOJrbXwfm8qOofYU6Xd0-YH';
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=0`;
+
+async function fetchData() {
+  try {
+    const response = await fetch(CSV_URL);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const csv = await response.text();
+    return csv;
+  } catch (error) {
+    console.error('Fetch error:', error);
+    return null;
+  }
+}
+
+function parseCSV(csv) {
+  const data = { transactions: [], summary: { totalIncome: 0, totalExpense: 0, currentBalance: 0 }, monthly: {}, categories: {}, lastDate: '' };
+  const lines = csv.split('\n');
+  
+  for (let i = 5; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    const parts = line.split(',');
+    if (parts.length < 5) continue;
+    
+    const dateStr = parts[0].trim();
+    const category = parts[1].trim();
+    const income = parseInt(parts[2].replace(/[^\d]/g, '')) || 0;
+    const expense = parseInt(parts[3].replace(/[^\d]/g, '')) || 0;
+    const balance = parseInt(parts[4].replace(/[^\d]/g, '')) || 0;
+    
+    if (dateStr.match(/^\d{4}-\d{2}-\d{2}/)) {
+      data.transactions.push({ date: dateStr, category, income, expense, balance });
+      data.lastDate = dateStr;
+      data.summary.totalIncome += income;
+      data.summary.totalExpense += expense;
+      data.summary.currentBalance = balance;
+      
+      const month = dateStr.substring(0, 7);
+      if (!data.monthly[month]) data.monthly[month] = { income: 0, expense: 0 };
+      data.monthly[month].income += income;
+      data.monthly[month].expense += expense;
+      
+      if (category && expense > 0) {
+        data.categories[category] = (data.categories[category] || 0) + expense;
+      }
+    }
+  }
+  
+  return data;
+}
+
+function formatCurrency(num) {
+  if (num >= 1000000) return `₩${(num / 1000000).toFixed(1)}M`;
+  if (num >= 1000) return `₩${(num / 1000).toFixed(0)}K`;
+  return `₩${num}`;
+}
+
+function formatNumber(num) {
+  return new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 }).format(num);
+}
+
+let charts = {};
+
+async function initDashboard() {
+  const csv = await fetchData();
+  
+  if (!csv) {
+    document.getElementById('content').innerHTML = '<div class="error">❌ Не удалось загрузить данные. Проверь интернет и таблицу.</div>';
+    return;
+  }
+  
+  const data = parseCSV(csv);
+  
+  if (data.transactions.length === 0) {
+    document.getElementById('content').innerHTML = '<div class="error">⚠️ Данные не найдены. Проверь таблицу.</div>';
+    return;
+  }
+  
+  const { totalIncome, totalExpense, currentBalance, lastDate } = data.summary;
+  const netResult = totalIncome - totalExpense;
+  const months = Object.keys(data.monthly).sort();
+  const topCategories = Object.entries(data.categories).filter(([k]) => k && k.length > 0).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  
+  const html = `<div class="metrics-grid"><div class="metric-card"><div class="metric-label">💰 Текущий баланс</div><div class="metric-value">${formatCurrency(currentBalance)}</div><div class="metric-small">На ${lastDate}</div></div><div class="metric-card"><div class="metric-label">📈 Поступления</div><div class="metric-value text-success">${formatCurrency(totalIncome)}</div><div class="metric-small">${formatNumber(data.transactions.filter(t => t.income > 0).length)} платежей</div></div><div class="metric-card"><div class="metric-label">💸 Расходы</div><div class="metric-value text-danger">${formatCurrency(totalExpense)}</div><div class="metric-small">${formatNumber(data.transactions.filter(t => t.expense > 0).length)} операций</div></div><div class="metric-card"><div class="metric-label">📊 Чистый результат</div><div class="metric-value" style="color: ${netResult >= 0 ? '#16a34a' : '#dc2626'}">${formatCurrency(netResult)}</div><div class="metric-small">${totalIncome > 0 ? ((netResult / totalIncome) * 100).toFixed(1) : 0}% ROI</div></div></div><div class="charts-grid"><div class="chart-wrapper"><h3>Доходы и расходы по месяцам</h3><div class="chart-container"><canvas id="monthlyChart"></canvas></div></div><div class="chart-wrapper"><h3>Расходы по топ-категориям</h3><div class="chart-container"><canvas id="categoryChart"></canvas></div></div></div><div class="table-wrapper"><h3>Последние 20 операций</h3><table><thead><tr><th>Дата</th><th>Категория</th><th style="text-align: right;">Поступление</th><th style="text-align: right;">Расход</th><th style="text-align: right;">Баланс</th></tr></thead><tbody id="txTable"></tbody></table></div>`;
+  
+  document.getElementById('content').innerHTML = html;
+  document.getElementById('last-update').textContent = `Обновлено: ${new Date().toLocaleString('ru-RU')}`;
+  
+  setTimeout(() => {
+    const ctx1 = document.getElementById('monthlyChart');
+    if (ctx1) {
+      if (charts.monthly) charts.monthly.destroy();
+      charts.monthly = new Chart(ctx1, {
+        type: 'bar',
+        data: {
+          labels: months,
+          datasets: [
+            { label: 'Поступления', data: months.map(m => data.monthly[m]?.income || 0), backgroundColor: '#16a34a', borderRadius: 4, borderSkipped: false },
+            { label: 'Расходы', data: months.map(m => data.monthly[m]?.expense || 0), backgroundColor: '#dc2626', borderRadius: 4, borderSkipped: false }
+          ]
+        },
+        options: { indexAxis: 'x', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top' } }, scales: { y: { beginAtZero: true, ticks: { callback: v => formatCurrency(v) } } } }
+      });
+    }
+  }, 100);
+  
+  setTimeout(() => {
+    const ctx2 = document.getElementById('categoryChart');
+    if (ctx2 && topCategories.length > 0) {
+      if (charts.category) charts.category.destroy();
+      charts.category = new Chart(ctx2, {
+        type: 'bar',
+        data: {
+          labels: topCategories.map(([k]) => k.substring(0, 25)),
+          datasets: [{ label: 'Сумма', data: topCategories.map(([, v]) => v), backgroundColor: ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#ef4444', '#a78bfa', '#14b8a6', '#fbbf24'] }]
+        },
+        options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { callback: v => formatCurrency(v) } } } }
+      });
+    }
+  }, 100);
+  
+  const tbody = document.getElementById('txTable');
+  if (tbody) {
+    tbody.innerHTML = '';
+    const lastTxs = [...data.transactions].reverse().slice(0, 20);
+    lastTxs.forEach(tx => {
+      const row = tbody.insertRow();
+      row.innerHTML = `<td>${tx.date}</td><td>${tx.category || '—'}</td><td style="text-align: right; color: ${tx.income > 0 ? '#16a34a' : '#999'};">${tx.income > 0 ? formatCurrency(tx.income) : '—'}</td><td style="text-align: right; color: ${tx.expense > 0 ? '#dc2626' : '#999'};">${tx.expense > 0 ? formatCurrency(tx.expense) : '—'}</td><td style="text-align: right; font-weight: 500;">${formatCurrency(tx.balance)}</td>`;
+    });
+  }
+}
+
+initDashboard();
+setInterval(initDashboard, 60000);
+</script>
+</body>
+</html>
