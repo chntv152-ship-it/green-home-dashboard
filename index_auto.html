@@ -65,26 +65,47 @@ function parseCSV(csv) {
     const line = lines[i].trim();
     if (!line) continue;
     
-    const parts = line.split(',');
+    const parts = [];
+    let current = '';
+    let inQuotes = false;
+    
+    for (let j = 0; j < line.length; j++) {
+      const char = line[j];
+      if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        parts.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    parts.push(current.trim());
+    
     if (parts.length < 5) continue;
     
-    const dateStr = parts[0].trim();
-    const category = parts[1].trim();
-    const income = parseInt(parts[2].replace(/[^\d]/g, '')) || 0;
-    const expense = parseInt(parts[3].replace(/[^\d]/g, '')) || 0;
-    const balance = parseInt(parts[4].replace(/[^\d]/g, '')) || 0;
+    const dateStr = parts[0].replace(/"/g, '').trim();
+    const category = parts[1].replace(/"/g, '').trim();
+    const incomStr = parts[2].replace(/"/g, '').replace(/[^\d]/g, '');
+    const expenseStr = parts[3].replace(/"/g, '').replace(/[^\d]/g, '');
+    const balanceStr = parts[4].replace(/"/g, '').replace(/[^\d-]/g, '');
+    
+    const income = incomStr ? parseInt(incomStr) : 0;
+    const expense = expenseStr ? parseInt(expenseStr) : 0;
+    const balance = balanceStr ? parseInt(balanceStr) : 0;
     
     if (dateStr.match(/^\d{4}-\d{2}-\d{2}/)) {
       data.transactions.push({ date: dateStr, category, income, expense, balance });
       data.lastDate = dateStr;
-      data.summary.totalIncome += income;
-      data.summary.totalExpense += expense;
+      
+      if (income > 0) data.summary.totalIncome += income;
+      if (expense > 0) data.summary.totalExpense += expense;
       data.summary.currentBalance = balance;
       
       const month = dateStr.substring(0, 7);
       if (!data.monthly[month]) data.monthly[month] = { income: 0, expense: 0 };
-      data.monthly[month].income += income;
-      data.monthly[month].expense += expense;
+      if (income > 0) data.monthly[month].income += income;
+      if (expense > 0) data.monthly[month].expense += expense;
       
       if (category && expense > 0) {
         data.categories[category] = (data.categories[category] || 0) + expense;
@@ -111,14 +132,14 @@ async function initDashboard() {
   const csv = await fetchData();
   
   if (!csv) {
-    document.getElementById('content').innerHTML = '<div class="error">❌ Не удалось загрузить данные. Проверь интернет и таблицу.</div>';
+    document.getElementById('content').innerHTML = '<div class="error">❌ Не удалось загрузить данные. Проверь интернет.</div>';
     return;
   }
   
   const data = parseCSV(csv);
   
   if (data.transactions.length === 0) {
-    document.getElementById('content').innerHTML = '<div class="error">⚠️ Данные не найдены. Проверь таблицу.</div>';
+    document.getElementById('content').innerHTML = '<div class="error">⚠️ Данные не найдены в таблице.</div>';
     return;
   }
   
