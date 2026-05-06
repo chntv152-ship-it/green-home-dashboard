@@ -42,70 +42,47 @@
   <div id="content" class="loading">⏳ Подтягиваю данные с Google Sheets...</div>
 </div>
 <script>
-const SHEET_ID = '1KlICmlMIxCOJrbXwfm8qOofYU6Xd0-YH';
-const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=0`;
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxx_xeetFQP0M0oY0ZI6_nJjpgtxaMYZgySz6AGE2r7Ub5Ot0vWjryXFs5grUzpE1q-/exec';
 
 async function fetchData() {
   try {
-    const response = await fetch(CSV_URL);
+    const response = await fetch(APPS_SCRIPT_URL);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const csv = await response.text();
-    return csv;
+    const json = await response.json();
+    return json;
   } catch (error) {
     console.error('Fetch error:', error);
     return null;
   }
 }
 
-function parseCSV(csv) {
+function parseSheetData(json) {
   const data = { transactions: [], summary: { totalIncome: 0, totalExpense: 0, currentBalance: 0 }, monthly: {}, categories: {}, lastDate: '' };
-  const lines = csv.split('\n');
+  if (!json || !json.data || !Array.isArray(json.data)) return data;
   
-  for (let i = 5; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
+  const rows = json.data;
+  
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length < 5) continue;
     
-    const parts = [];
-    let current = '';
-    let inQuotes = false;
-    
-    for (let j = 0; j < line.length; j++) {
-      const char = line[j];
-      if (char === '"') {
-        inQuotes = !inQuotes;
-      } else if (char === ',' && !inQuotes) {
-        parts.push(current.trim());
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-    parts.push(current.trim());
-    
-    if (parts.length < 5) continue;
-    
-    const dateStr = parts[0].replace(/"/g, '').trim();
-    const category = parts[1].replace(/"/g, '').trim();
-    const incomStr = parts[2].replace(/"/g, '').replace(/[^\d]/g, '');
-    const expenseStr = parts[3].replace(/"/g, '').replace(/[^\d]/g, '');
-    const balanceStr = parts[4].replace(/"/g, '').replace(/[^\d-]/g, '');
-    
-    const income = incomStr ? parseInt(incomStr) : 0;
-    const expense = expenseStr ? parseInt(expenseStr) : 0;
-    const balance = balanceStr ? parseInt(balanceStr) : 0;
+    const dateStr = String(row[0]).trim();
+    const category = String(row[1]).trim();
+    const income = parseInt(String(row[2]).replace(/[^\d]/g, '')) || 0;
+    const expense = parseInt(String(row[3]).replace(/[^\d]/g, '')) || 0;
+    const balance = parseInt(String(row[4]).replace(/[^\d-]/g, '')) || 0;
     
     if (dateStr.match(/^\d{4}-\d{2}-\d{2}/)) {
       data.transactions.push({ date: dateStr, category, income, expense, balance });
       data.lastDate = dateStr;
-      
-      if (income > 0) data.summary.totalIncome += income;
-      if (expense > 0) data.summary.totalExpense += expense;
+      data.summary.totalIncome += income;
+      data.summary.totalExpense += expense;
       data.summary.currentBalance = balance;
       
       const month = dateStr.substring(0, 7);
       if (!data.monthly[month]) data.monthly[month] = { income: 0, expense: 0 };
-      if (income > 0) data.monthly[month].income += income;
-      if (expense > 0) data.monthly[month].expense += expense;
+      data.monthly[month].income += income;
+      data.monthly[month].expense += expense;
       
       if (category && expense > 0) {
         data.categories[category] = (data.categories[category] || 0) + expense;
@@ -129,17 +106,17 @@ function formatNumber(num) {
 let charts = {};
 
 async function initDashboard() {
-  const csv = await fetchData();
+  const json = await fetchData();
   
-  if (!csv) {
-    document.getElementById('content').innerHTML = '<div class="error">❌ Не удалось загрузить данные. Проверь интернет.</div>';
+  if (!json) {
+    document.getElementById('content').innerHTML = '<div class="error">❌ Не удалось загрузить данные. Проверь Apps Script.</div>';
     return;
   }
   
-  const data = parseCSV(csv);
+  const data = parseSheetData(json);
   
   if (data.transactions.length === 0) {
-    document.getElementById('content').innerHTML = '<div class="error">⚠️ Данные не найдены в таблице.</div>';
+    document.getElementById('content').innerHTML = '<div class="error">⚠️ Данные не найдены.</div>';
     return;
   }
   
